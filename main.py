@@ -1,14 +1,13 @@
 import sys
 import os
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                               QHBoxLayout, QTreeView, QTextEdit, QLineEdit,
-                               QPushButton, QLabel, QFileSystemModel,
-                               QSplitter, QMessageBox, QMenu, QDialog,
-                               QDialogButtonBox, QFormLayout, QListWidget,
+                               QHBoxLayout, QTextEdit, QLineEdit,
+                               QPushButton, QLabel, QMessageBox, QMenu, QDialog,
+                               QDialogButtonBox, QFormLayout,
                                QInputDialog, QFrame, QScrollArea, QGridLayout,
                                QCheckBox, QGraphicsDropShadowEffect)
 from PySide6.QtGui import QAction, QFont, QIcon, QPixmap, QPainter, QColor
-from PySide6.QtCore import Qt, QDir, QItemSelectionModel, QSize, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QDir, QSize
 
 
 class FileCard(QFrame):
@@ -17,6 +16,8 @@ class FileCard(QFrame):
         self.name = name
         self.path = path
         self.is_dir = is_dir
+        self.parent_app = parent
+        self.is_renaming = False
         self.setup_ui()
 
     def setup_ui(self):
@@ -31,43 +32,51 @@ class FileCard(QFrame):
         shadow.setOffset(2, 2)
         self.setGraphicsEffect(shadow)
 
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignCenter)
-        layout.setSpacing(5)
-        layout.setContentsMargins(5, 5, 5, 5)
+        self.layout = QVBoxLayout(self)
+        self.layout.setAlignment(Qt.AlignCenter)
+        self.layout.setSpacing(5)
+        self.layout.setContentsMargins(5, 5, 5, 5)
 
-        # Иконка (эмуляция)
-        icon_label = QLabel()
-        icon_label.setFixedSize(48, 48)
+        # Иконка
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(48, 48)
         if self.is_dir:
-            icon_label.setStyleSheet("""
+            self.icon_label.setStyleSheet("""
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #4CAF50, stop:1 #388E3C);
                 border-radius: 8px;
                 color: white;
                 font-weight: bold;
             """)
-            icon_label.setText("📁")
+            self.icon_label.setText("📁")
         else:
-            icon_label.setStyleSheet("""
+            self.icon_label.setStyleSheet("""
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #2196F3, stop:1 #1976D2);
                 border-radius: 8px;
                 color: white;
                 font-weight: bold;
             """)
-            icon_label.setText("📄")
-        icon_label.setAlignment(Qt.AlignCenter)
+            self.icon_label.setText("📄")
+        self.icon_label.setAlignment(Qt.AlignCenter)
 
         # Название файла/папки
-        name_label = QLabel(self.name)
-        name_label.setAlignment(Qt.AlignCenter)
-        name_label.setWordWrap(True)
-        name_label.setMaximumWidth(110)
-        name_label.setStyleSheet("font-size: 11px;")
+        self.name_label = QLabel(self.name)
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.setWordWrap(True)
+        self.name_label.setMaximumWidth(110)
+        self.name_label.setStyleSheet("font-size: 11px;")
 
-        layout.addWidget(icon_label)
-        layout.addWidget(name_label)
+        # Поле для редактирования имени
+        self.name_edit = QLineEdit(self.name)
+        self.name_edit.setVisible(False)
+        self.name_edit.setMaxLength(50)
+        self.name_edit.returnPressed.connect(self.finish_rename)
+        self.name_edit.editingFinished.connect(self.cancel_rename)
+
+        self.layout.addWidget(self.icon_label)
+        self.layout.addWidget(self.name_label)
+        self.layout.addWidget(self.name_edit)
 
         # Стиль карточки
         self.setStyleSheet("""
@@ -82,30 +91,104 @@ class FileCard(QFrame):
             }
         """)
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if not self.is_renaming:
+                # Ctrl для множественного выбора
+                if event.modifiers() & Qt.ControlModifier:
+                    if self.path in self.parent_app.selected_cards:
+                        self.parent_app.deselect_card(self)
+                    else:
+                        self.parent_app.select_card(self)
+                else:
+                    # Одиночный выбор
+                    self.parent_app.clear_selection()
+                    self.parent_app.select_card(self)
 
-class RenameDialog(QDialog):
-    def __init__(self, current_name, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Переименовать")
-        self.setModal(True)
-        self.resize(300, 100)
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if self.is_renaming:
+                self.finish_rename()
+            else:
+                if os.path.isdir(self.path):
+                    self.parent_app.open_directory(self.path)
+                else:
+                    # Для файлов двойной клик начинает редактирование
+                    self.start_rename()
 
-        layout = QFormLayout(self)
+    def contextMenuEvent(self, event):
+        if not self.is_renaming:
+            menu = QMenu(self)
 
-        self.old_name_label = QLabel(current_name)
-        self.new_name_input = QLineEdit(current_name)
+            rename_action = QAction("Переименовать", self)
+            rename_action.triggered.connect(self.start_rename)
+            menu.addAction(rename_action)
 
-        layout.addRow("Текущее имя:", self.old_name_label)
-        layout.addRow("Новое имя:", self.new_name_input)
+            if os.path.isdir(self.path):
+                open_action = QAction("Открыть", self)
+                open_action.triggered.connect(lambda: self.parent_app.open_directory(self.path))
+                menu.addAction(open_action)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
+            menu.exec_(event.globalPos())
 
-        layout.addRow(buttons)
+    def start_rename(self):
+        self.is_renaming = True
+        self.name_label.setVisible(False)
+        self.name_edit.setVisible(True)
+        self.name_edit.selectAll()
+        self.name_edit.setFocus()
 
-    def get_new_name(self):
-        return self.new_name_input.text().strip()
+        # Подсветка карточки при редактировании
+        self.setStyleSheet("""
+            FileCard {
+                background: #FFF3E0;
+                border: 2px solid #FF9800;
+                border-radius: 8px;
+            }
+        """)
+
+    def finish_rename(self):
+        new_name = self.name_edit.text().strip()
+        if new_name and new_name != self.name:
+            try:
+                new_path = os.path.join(os.path.dirname(self.path), new_name)
+                os.rename(self.path, new_path)
+                self.name = new_name
+                self.path = new_path
+                self.name_label.setText(new_name)
+                self.parent_app.refresh_view()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось переименовать: {e}")
+
+        self.cancel_rename()
+
+    def cancel_rename(self):
+        self.is_renaming = False
+        self.name_edit.setVisible(False)
+        self.name_label.setVisible(True)
+        self.name_edit.setText(self.name)
+
+        # Возвращаем обычный стиль
+        if self.path in self.parent_app.selected_cards:
+            self.setStyleSheet("""
+                FileCard {
+                    background: #E3F2FD;
+                    border: 2px solid #2196F3;
+                    border-radius: 8px;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                FileCard {
+                    background: white;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 8px;
+                }
+                FileCard:hover {
+                    background: #f5f5f5;
+                    border: 1px solid #2196F3;
+                }
+            """)
 
 
 class GroupRenameDialog(QDialog):
@@ -113,25 +196,68 @@ class GroupRenameDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Групповое переименование")
         self.setModal(True)
-        self.resize(400, 150)
+        self.resize(500, 300)
 
-        layout = QFormLayout(self)
+        layout = QVBoxLayout(self)
 
-        self.file_count_label = QLabel(f"Будет переименовано файлов: {file_count}")
-        self.new_name_input = QLineEdit()
-        self.new_name_input.setPlaceholderText("Введите новое базовое имя")
+        # Информация о выбранных файлах
+        info_label = QLabel(f"Выбрано файлов для переименования: {file_count}")
+        info_label.setStyleSheet("font-weight: bold; color: #1976D2;")
+        layout.addWidget(info_label)
 
-        layout.addRow(self.file_count_label)
-        layout.addRow("Базовое имя:", self.new_name_input)
+        # Поля для ввода шаблона
+        form_layout = QFormLayout()
 
+        self.base_name_input = QLineEdit()
+        self.base_name_input.setPlaceholderText("базовое_имя")
+        form_layout.addRow("Базовое имя:", self.base_name_input)
+
+        self.start_number_input = QLineEdit("1")
+        self.start_number_input.setPlaceholderText("1")
+        form_layout.addRow("Начальный номер:", self.start_number_input)
+
+        self.preview_label = QLabel("Предпросмотр:")
+        self.preview_text = QTextEdit()
+        self.preview_text.setReadOnly(True)
+        self.preview_text.setMaximumHeight(100)
+        self.preview_text.setStyleSheet("font-family: monospace;")
+
+        layout.addLayout(form_layout)
+        layout.addWidget(self.preview_label)
+        layout.addWidget(self.preview_text)
+
+        # Кнопки
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
-        layout.addRow(buttons)
+        layout.addWidget(buttons)
 
-    def get_new_name(self):
-        return self.new_name_input.text().strip()
+        # Обновление предпросмотра
+        self.base_name_input.textChanged.connect(self.update_preview)
+        self.start_number_input.textChanged.connect(self.update_preview)
+
+    def update_preview(self):
+        base_name = self.base_name_input.text().strip()
+        try:
+            start_num = int(self.start_number_input.text().strip() or "1")
+        except ValueError:
+            start_num = 1
+
+        preview_text = ""
+        for i in range(3):  # Показываем первые 3 примера
+            new_name = f"{base_name}_{start_num + i}" if base_name else f"{start_num + i}"
+            preview_text += f"{i + 1}. {new_name}\n"
+
+        self.preview_text.setText(preview_text)
+
+    def get_rename_params(self):
+        base_name = self.base_name_input.text().strip()
+        try:
+            start_num = int(self.start_number_input.text().strip() or "1")
+        except ValueError:
+            start_num = 1
+        return base_name, start_num
 
 
 class FileManagerApp(QMainWindow):
@@ -149,7 +275,6 @@ class FileManagerApp(QMainWindow):
         self.current_path = self.root_path
 
         self.setup_ui()
-        self.setup_file_system()
 
     def setup_ui(self):
         # Центральный виджет
@@ -204,64 +329,39 @@ class FileManagerApp(QMainWindow):
         nav_layout.addWidget(self.up_button)
         nav_layout.addWidget(self.refresh_button)
 
-        # Путь
-        path_layout = QVBoxLayout()
+        # Путь (только текущий путь)
         self.path_label = QLabel(f"Текущий путь: {self.get_relative_path()}")
-        self.path_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px;")
-
-        self.breadcrumb_label = QLabel(self.get_breadcrumb())
-        self.breadcrumb_label.setStyleSheet("color: #E3F2FD; font-size: 10px;")
-
-        path_layout.addWidget(self.path_label)
-        path_layout.addWidget(self.breadcrumb_label)
+        self.path_label.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
 
         top_layout.addLayout(nav_layout)
         top_layout.addStretch()
-        top_layout.addLayout(path_layout)
+        top_layout.addWidget(self.path_label)
 
         main_layout.addWidget(top_frame)
 
     def setup_workspace(self, main_layout):
-        workspace_splitter = QSplitter(Qt.Horizontal)
+        workspace_widget = QWidget()
+        workspace_layout = QHBoxLayout(workspace_widget)
 
-        # Левая панель - древовидное представление (свернуто по умолчанию)
-        self.tree_panel = QWidget()
-        tree_layout = QVBoxLayout(self.tree_panel)
-
-        tree_header = QLabel("🌳 Дерево папок")
-        tree_header.setStyleSheet("font-weight: bold; color: #1976D2;")
-        tree_layout.addWidget(tree_header)
-
-        self.tree_view = QTreeView()
-        self.tree_view.setFont(QFont("Consolas", 9))
-        self.tree_view.doubleClicked.connect(self.on_item_double_clicked)
-        self.tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tree_view.customContextMenuRequested.connect(self.show_context_menu)
-        self.tree_view.setSelectionMode(QTreeView.ExtendedSelection)
-        self.tree_view.setMaximumWidth(300)
-
-        tree_layout.addWidget(self.tree_view)
-
-        # Центральная панель - карточки файлов
-        central_panel = QWidget()
-        central_layout = QVBoxLayout(central_panel)
+        # Левая панель - карточки файлов
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
 
         # Панель инструментов карточек
         card_tools_layout = QHBoxLayout()
 
-        self.view_mode_button = QPushButton("📋 Список")
-        self.view_mode_button.setCheckable(True)
-        self.view_mode_button.setFixedWidth(100)
-        self.view_mode_button.clicked.connect(self.toggle_view_mode)
-
         self.select_all_checkbox = QCheckBox("Выбрать все")
         self.select_all_checkbox.stateChanged.connect(self.toggle_select_all)
 
-        card_tools_layout.addWidget(self.view_mode_button)
-        card_tools_layout.addStretch()
-        card_tools_layout.addWidget(self.select_all_checkbox)
+        self.group_rename_button = QPushButton("Групповое переименование")
+        self.group_rename_button.clicked.connect(self.group_rename_selected)
+        self.group_rename_button.setEnabled(False)
 
-        central_layout.addLayout(card_tools_layout)
+        card_tools_layout.addWidget(self.select_all_checkbox)
+        card_tools_layout.addStretch()
+        card_tools_layout.addWidget(self.group_rename_button)
+
+        left_layout.addLayout(card_tools_layout)
 
         # Область с карточками
         self.cards_scroll = QScrollArea()
@@ -274,7 +374,7 @@ class FileManagerApp(QMainWindow):
         self.cards_scroll.setWidgetResizable(True)
         self.cards_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        central_layout.addWidget(self.cards_scroll)
+        left_layout.addWidget(self.cards_scroll)
 
         # Правая панель - информация
         info_panel = QFrame()
@@ -300,15 +400,10 @@ class FileManagerApp(QMainWindow):
 
         info_layout.addWidget(self.info_text)
 
-        # Настройка splitter
-        workspace_splitter.addWidget(self.tree_panel)
-        workspace_splitter.addWidget(central_panel)
-        workspace_splitter.addWidget(info_panel)
+        workspace_layout.addWidget(left_panel)
+        workspace_layout.addWidget(info_panel)
 
-        # Начальные размеры (дерево свернуто)
-        workspace_splitter.setSizes([100, 700, 400])
-
-        main_layout.addWidget(workspace_splitter)
+        main_layout.addWidget(workspace_widget)
 
     def setup_command_panel(self, main_layout):
         command_frame = QFrame()
@@ -374,13 +469,6 @@ class FileManagerApp(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        # Меню Вид
-        view_menu = menubar.addMenu("Вид")
-
-        toggle_tree_action = QAction("🌳 Показать/скрыть дерево", self)
-        toggle_tree_action.triggered.connect(self.toggle_tree_view)
-        view_menu.addAction(toggle_tree_action)
-
         # Меню Помощь
         help_menu = menubar.addMenu("Помощь")
 
@@ -388,34 +476,12 @@ class FileManagerApp(QMainWindow):
         help_action.triggered.connect(self.show_help)
         help_menu.addAction(help_action)
 
-    def setup_file_system(self):
-        # Модель файловой системы
-        self.model = QFileSystemModel()
-        self.model.setRootPath(self.root_path)
-        self.model.setNameFilters([])
-        self.model.setNameFilterDisables(False)
-
-        self.tree_view.setModel(self.model)
-        self.tree_view.setRootIndex(self.model.index(self.root_path))
-        self.tree_view.hideColumn(1)
-        self.tree_view.hideColumn(2)
-        self.tree_view.hideColumn(3)
-
-        self.update_info()
-        self.update_cards_view()
-
     def get_relative_path(self):
         rel_path = os.path.relpath(self.current_path, start=self.root_path)
         return rel_path if rel_path != "." else "main"
 
-    def get_breadcrumb(self):
-        rel_path = self.get_relative_path()
-        parts = rel_path.split(os.sep)
-        return " > ".join(parts)
-
     def update_info(self):
         self.path_label.setText(f"Текущий путь: {self.get_relative_path()}")
-        self.breadcrumb_label.setText(self.get_breadcrumb())
         self.show_dir_info()
 
     def show_dir_info(self):
@@ -437,6 +503,8 @@ class FileManagerApp(QMainWindow):
                     total_size += os.path.getsize(file_path)
                 info_text += f"📊 <b>Общий размер файлов:</b> {total_size} байт\n"
 
+            info_text += f"\n🎯 <b>Выбрано:</b> {len(self.selected_cards)} элементов"
+
         except PermissionError:
             info_text += "❌ <b>Нет доступа к этой папке</b>"
 
@@ -453,19 +521,16 @@ class FileManagerApp(QMainWindow):
 
         try:
             entries = os.listdir(self.current_path)
-            entries.sort()  # Сортируем для красивого отображения
+            entries.sort()
 
             row, col = 0, 0
-            max_cols = 6  # Максимальное количество карточек в строке
+            max_cols = 6
 
             for entry in entries:
                 entry_path = os.path.join(self.current_path, entry)
                 is_dir = os.path.isdir(entry_path)
 
-                card = FileCard(entry, entry_path, is_dir)
-                card.mousePressEvent = lambda event, c=card: self.on_card_clicked(c, event)
-                card.mouseDoubleClickEvent = lambda event, p=entry_path: self.on_card_double_clicked(p, event)
-
+                card = FileCard(entry, entry_path, is_dir, self)
                 self.cards_layout.addWidget(card, row, col)
                 col += 1
                 if col >= max_cols:
@@ -477,22 +542,7 @@ class FileManagerApp(QMainWindow):
             error_label.setStyleSheet("color: red; font-size: 16px;")
             self.cards_layout.addWidget(error_label, 0, 0)
 
-    def on_card_clicked(self, card, event):
-        if event.button() == Qt.LeftButton:
-            # Ctrl для множественного выбора
-            if event.modifiers() & Qt.ControlModifier:
-                if card.path in self.selected_cards:
-                    self.deselect_card(card)
-                else:
-                    self.select_card(card)
-            else:
-                # Одиночный выбор
-                self.clear_selection()
-                self.select_card(card)
-
-    def on_card_double_clicked(self, path, event):
-        if os.path.isdir(path):
-            self.open_directory(path)
+        self.update_group_rename_button()
 
     def select_card(self, card):
         card.setStyleSheet("""
@@ -503,6 +553,8 @@ class FileManagerApp(QMainWindow):
             }
         """)
         self.selected_cards[card.path] = card
+        self.update_group_rename_button()
+        self.update_info()
 
     def deselect_card(self, card):
         card.setStyleSheet("""
@@ -518,11 +570,15 @@ class FileManagerApp(QMainWindow):
         """)
         if card.path in self.selected_cards:
             del self.selected_cards[card.path]
+        self.update_group_rename_button()
+        self.update_info()
 
     def clear_selection(self):
         for card in list(self.selected_cards.values()):
             self.deselect_card(card)
         self.selected_cards.clear()
+        self.update_group_rename_button()
+        self.update_info()
 
     def toggle_select_all(self, state):
         if state == Qt.Checked:
@@ -534,23 +590,13 @@ class FileManagerApp(QMainWindow):
         else:
             self.clear_selection()
 
-    def toggle_view_mode(self):
-        if self.view_mode_button.isChecked():
-            self.view_mode_button.setText("🃏 Карточки")
-            # Здесь можно реализовать режим списка
-        else:
-            self.view_mode_button.setText("📋 Список")
-            self.update_cards_view()
-
-    def toggle_tree_view(self):
-        if self.tree_panel.isVisible():
-            self.tree_panel.hide()
-        else:
-            self.tree_panel.show()
+    def update_group_rename_button(self):
+        # Включаем кнопку только если выбраны файлы (не папки)
+        has_files = any(not os.path.isdir(path) for path in self.selected_cards.keys())
+        self.group_rename_button.setEnabled(len(self.selected_cards) > 0 and has_files)
 
     def go_home(self):
         self.current_path = self.root_path
-        self.tree_view.setRootIndex(self.model.index(self.current_path))
         self.update_info()
         self.update_cards_view()
 
@@ -562,118 +608,11 @@ class FileManagerApp(QMainWindow):
             QMessageBox.information(self, "Информация", "Вы уже в корне дерева.")
         else:
             self.current_path = parent
-            self.tree_view.setRootIndex(self.model.index(self.current_path))
             self.update_info()
             self.update_cards_view()
 
-    def on_item_double_clicked(self, index):
-        path = self.model.filePath(index)
-        if os.path.isdir(path):
-            self.open_directory(path)
-
-    def show_context_menu(self, position):
-        index = self.tree_view.indexAt(position)
-        if not index.isValid():
-            return
-
-        path = self.model.filePath(index)
-        menu = QMenu(self)
-
-        if os.path.isdir(path):
-            rename_action = QAction("Переименовать", self)
-            rename_action.triggered.connect(lambda: self.rename_item(path))
-            menu.addAction(rename_action)
-
-            open_action = QAction("Открыть", self)
-            open_action.triggered.connect(lambda: self.open_directory(path))
-            menu.addAction(open_action)
-        else:
-            rename_action = QAction("Переименовать файл", self)
-            rename_action.triggered.connect(lambda: self.rename_item(path))
-            menu.addAction(rename_action)
-
-        selected_indexes = self.tree_view.selectionModel().selectedIndexes()
-        if len(selected_indexes) > 1:
-            group_rename_action = QAction("Групповое переименование выделенных", self)
-            group_rename_action.triggered.connect(self.group_rename_selected)
-            menu.addAction(group_rename_action)
-
-        menu.exec_(self.tree_view.viewport().mapToGlobal(position))
-
-    def rename_item(self, path):
-        current_name = os.path.basename(path)
-        dialog = RenameDialog(current_name, self)
-        if dialog.exec_() == QDialog.Accepted:
-            new_name = dialog.get_new_name()
-            if new_name and new_name != current_name:
-                try:
-                    new_path = os.path.join(os.path.dirname(path), new_name)
-                    os.rename(path, new_path)
-                    self.refresh_view()
-                    QMessageBox.information(self, "Успех", f"Успешно переименовано в: {new_name}")
-                except Exception as e:
-                    QMessageBox.critical(self, "Ошибка", f"Не удалось переименовать: {e}")
-
-    def group_rename_selected(self):
-        """Групповое переименование выделенных файлов"""
-        if not self.selected_cards:
-            # Если ничего не выбрано в карточках, используем старый метод
-            selected_indexes = self.tree_view.selectionModel().selectedIndexes()
-            file_paths = []
-            for index in selected_indexes:
-                if index.column() == 0:
-                    path = self.model.filePath(index)
-                    if os.path.isfile(path):
-                        file_paths.append(path)
-        else:
-            # Используем выбранные карточки
-            file_paths = [path for path in self.selected_cards.keys()
-                          if os.path.isfile(path)]
-
-        if not file_paths:
-            QMessageBox.information(self, "Информация", "Выберите файлы для переименования.")
-            return
-
-        file_paths.sort()
-        dialog = GroupRenameDialog(len(file_paths), self)
-        if dialog.exec_() == QDialog.Accepted:
-            new_base_name = dialog.get_new_name()
-            if not new_base_name:
-                QMessageBox.warning(self, "Ошибка", "Введите базовое имя.")
-                return
-
-            self.perform_group_rename(file_paths, new_base_name)
-
-    def perform_group_rename(self, file_paths, new_base_name):
-        """Выполняет групповое переименование файлов"""
-        success_count = 0
-        warning_messages = []
-
-        for i, old_path in enumerate(file_paths, 1):
-            if not os.path.exists(old_path):
-                warning_messages.append(f"Файл не существует: {os.path.basename(old_path)}")
-                continue
-
-            _, ext = os.path.splitext(old_path)
-            new_name = f"{new_base_name}_{i}{ext}"
-            new_path = os.path.join(os.path.dirname(old_path), new_name)
-
-            try:
-                os.rename(old_path, new_path)
-                success_count += 1
-            except Exception as e:
-                warning_messages.append(f"Ошибка переименования {os.path.basename(old_path)}: {e}")
-
-        result_message = f"Успешно переименовано: {success_count} файлов"
-        if warning_messages:
-            result_message += f"\n\nПредупреждения:\n" + "\n".join(warning_messages)
-
-        QMessageBox.information(self, "Результат", result_message)
-        self.refresh_view()
-
     def open_directory(self, path):
         self.current_path = path
-        self.tree_view.setRootIndex(self.model.index(path))
         self.update_info()
         self.update_cards_view()
 
@@ -689,12 +628,62 @@ class FileManagerApp(QMainWindow):
                 QMessageBox.critical(self, "Ошибка", f"Не удалось создать папку: {e}")
 
     def refresh_view(self):
-        self.model.setRootPath(self.root_path)
-        self.tree_view.setRootIndex(self.model.index(self.current_path))
         self.update_info()
         self.update_cards_view()
         self.clear_selection()
         self.select_all_checkbox.setCheckState(Qt.Unchecked)
+
+    def group_rename_selected(self):
+        """Групповое переименование выбранных файлов"""
+        if not self.selected_cards:
+            QMessageBox.information(self, "Информация", "Выберите файлы для переименования.")
+            return
+
+        # Фильтруем только файлы
+        file_paths = [path for path in self.selected_cards.keys()
+                      if os.path.isfile(path)]
+
+        if not file_paths:
+            QMessageBox.information(self, "Информация", "Выберите файлы (не папки) для переименования.")
+            return
+
+        file_paths.sort()
+
+        dialog = GroupRenameDialog(len(file_paths), self)
+        if dialog.exec_() == QDialog.Accepted:
+            base_name, start_num = dialog.get_rename_params()
+            if not base_name:
+                QMessageBox.warning(self, "Ошибка", "Введите базовое имя.")
+                return
+
+            self.perform_group_rename(file_paths, base_name, start_num)
+
+    def perform_group_rename(self, file_paths, base_name, start_num):
+        """Выполняет групповое переименование файлов"""
+        success_count = 0
+        warning_messages = []
+
+        for i, old_path in enumerate(file_paths, start_num):
+            if not os.path.exists(old_path):
+                warning_messages.append(f"Файл не существует: {os.path.basename(old_path)}")
+                continue
+
+            _, ext = os.path.splitext(old_path)
+            new_name = f"{base_name}_{i}{ext}"
+            new_path = os.path.join(os.path.dirname(old_path), new_name)
+
+            try:
+                os.rename(old_path, new_path)
+                success_count += 1
+            except Exception as e:
+                warning_messages.append(f"Ошибка переименования {os.path.basename(old_path)}: {e}")
+
+        result_message = f"Успешно переименовано: {success_count} файлов"
+        if warning_messages:
+            result_message += f"\n\nПредупреждения:\n" + "\n".join(warning_messages)
+
+        QMessageBox.information(self, "Результат", result_message)
+        self.refresh_view()
 
     def execute_command(self):
         command = self.command_input.text().strip()
@@ -809,11 +798,11 @@ class FileManagerApp(QMainWindow):
   <b>выход</b> - закрыть программу
 
 💡 <b>Советы:</b>
-- Двойной клик по папке/карточке открывает её
+- Двойной клик по папке открывает её
+- Двойной клик по файлу начинает редактирование имени
 - Выделяйте несколько файлов с помощью Ctrl+клик
 - Используйте "Выбрать все" для массовых операций
-- Дерево папок можно скрыть через меню "Вид"
-- Карточный интерфейс упрощает визуальную навигацию
+- Правый клик открывает контекстное меню
 """
         self.info_text.setText(help_text)
 
