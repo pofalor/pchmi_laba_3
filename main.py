@@ -1,12 +1,12 @@
 import sys
 import os
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                               QHBoxLayout, QTextEdit, QLineEdit, QPushButton,
+                               QHBoxLayout, QLineEdit, QPushButton,
                                QLabel, QMessageBox, QMenu, QDialog, QDialogButtonBox,
                                QFormLayout, QInputDialog, QScrollArea, QFrame,
                                QGridLayout, QCheckBox)
-from PySide6.QtGui import QAction, QFont, QIcon, QPixmap, QPainter
-from PySide6.QtCore import Qt, QDir, QSize, Signal
+from PySide6.QtGui import QAction, QFont
+from PySide6.QtCore import Qt, Signal
 import datetime
 
 
@@ -24,7 +24,8 @@ class FileCard(QFrame):
     def setup_ui(self):
         self.setFrameStyle(QFrame.Box)
         self.setLineWidth(1)
-        self.setFixedSize(200, 120)
+        self.setMinimumWidth(200)
+        self.setMinimumHeight(120)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -50,14 +51,15 @@ class FileCard(QFrame):
         date_label.setStyleSheet("QLabel { color: gray; font-size: 10px; }")
         layout.addWidget(date_label)
 
-        # Теги (папки)
-        tags_widget = QWidget()
-        tags_layout = QVBoxLayout(tags_widget)
-        tags_layout.setContentsMargins(0, 5, 0, 0)
-
+        # Теги (папки) - используем Flow Layout
         tags_label = QLabel("Теги:")
         tags_label.setStyleSheet("QLabel { font-weight: bold; font-size: 10px; }")
-        tags_layout.addWidget(tags_label)
+        layout.addWidget(tags_label)
+
+        self.tags_widget = QWidget()
+        self.tags_layout = QHBoxLayout(self.tags_widget)
+        self.tags_layout.setContentsMargins(0, 0, 0, 0)
+        self.tags_layout.setSpacing(3)
 
         # Получаем теги из пути относительно root_path
         rel_path = os.path.relpath(os.path.dirname(self.file_path), self.root_path)
@@ -66,11 +68,22 @@ class FileCard(QFrame):
             for folder in folders:
                 tag_label = QLabel(f"📁 {folder}")
                 tag_label.setStyleSheet(
-                    "QLabel { background: #e0e0e0; padding: 2px; border-radius: 3px; font-size: 9px; }")
-                tags_layout.addWidget(tag_label)
+                    "QLabel { background: #e0e0e0; padding: 2px 4px; border-radius: 3px; font-size: 9px; }")
+                tag_label.setWordWrap(True)
+                self.tags_layout.addWidget(tag_label)
 
-        layout.addWidget(tags_widget)
+        layout.addWidget(self.tags_widget)
         layout.addStretch()
+
+        # Обновляем высоту карточки в зависимости от количества тегов
+        self.update_card_height()
+
+    def update_card_height(self):
+        # Базовая высота + дополнительная высота за теги
+        base_height = 120
+        tag_count = self.tags_layout.count()
+        additional_height = (tag_count // 2) * 20  # +20px за каждые 2 тега
+        self.setMinimumHeight(base_height + additional_height)
 
     def start_rename(self, event):
         self.is_renaming = True
@@ -108,8 +121,8 @@ class FilesView(QWidget):
     def __init__(self, root_path):
         super().__init__()
         self.root_path = root_path
-        self.file_cards = []
-        self.selected_files = set()
+        self.file_widgets = []  # Храним виджеты карточек с чекбоксами
+        self._selected_files = set()
         self.setup_ui()
         self.refresh_files()
 
@@ -132,6 +145,7 @@ class FilesView(QWidget):
         self.scroll_area = QScrollArea()
         self.scroll_widget = QWidget()
         self.grid_layout = QGridLayout(self.scroll_widget)
+        self.grid_layout.setAlignment(Qt.AlignTop)
         self.scroll_area.setWidget(self.scroll_widget)
         self.scroll_area.setWidgetResizable(True)
 
@@ -139,12 +153,12 @@ class FilesView(QWidget):
 
     def refresh_files(self):
         # Очищаем старые карточки
-        for card_widget in self.file_cards:
-            card_widget.setParent(None)
-            card_widget.deleteLater()
+        for widget in self.file_widgets:
+            widget.setParent(None)
+            widget.deleteLater()
 
-        self.file_cards = []
-        self.selected_files.clear()
+        self.file_widgets = []
+        self._selected_files.clear()
 
         # Собираем все файлы рекурсивно
         all_files = []
@@ -161,7 +175,7 @@ class FilesView(QWidget):
 
             # Добавляем чекбокс для выбора
             checkbox = QCheckBox()
-            checkbox.stateChanged.connect(lambda state, fp=file_path: self.on_file_selected(fp, state))
+            checkbox.stateChanged.connect(lambda state, fp=file_path, cb=checkbox: self.on_file_selected(fp, state, cb))
 
             card_widget = QWidget()
             card_layout = QVBoxLayout(card_widget)
@@ -169,49 +183,52 @@ class FilesView(QWidget):
             card_layout.addWidget(checkbox)
             card_layout.addWidget(card)
 
-            self.file_cards.append(card_widget)
+            self.file_widgets.append(card_widget)
 
             row = i // 4
             col = i % 4
             self.grid_layout.addWidget(card_widget, row, col)
 
+        # Обновляем состояние кнопки выбора всех
+        self.update_select_all_button()
+
     def on_file_renamed(self, file_path, old_name, new_name):
         # Обновляем интерфейс при переименовании файла
         self.refresh_files()
 
-    def on_file_selected(self, file_path, state):
+    def on_file_selected(self, file_path, state, checkbox):
         if state == Qt.Checked:
-            self.selected_files.add(file_path)
+            self._selected_files.add(file_path)
         else:
-            self.selected_files.discard(file_path)
+            self._selected_files.discard(file_path)
 
-        self.selection_changed.emit(list(self.selected_files))
+        self.selection_changed.emit(list(self._selected_files))
+        self.update_select_all_button()
+
+    def update_select_all_button(self):
+        # Обновляем текст кнопки "Выбрать все"
+        if len(self._selected_files) == len(self.file_widgets) and len(self.file_widgets) > 0:
+            self.select_all_btn.setText("Снять выделение")
+        else:
+            self.select_all_btn.setText("Выбрать все")
 
     def toggle_select_all(self):
-        if len(self.selected_files) == len(self.file_cards):
+        if len(self._selected_files) == len(self.file_widgets):
             # Снимаем выделение со всех
-            for i in range(self.grid_layout.count()):
-                item = self.grid_layout.itemAt(i)
-                if item and item.widget():
-                    checkbox = item.widget().layout().itemAt(0).widget()
-                    if isinstance(checkbox, QCheckBox):
-                        checkbox.setChecked(False)
+            for widget in self.file_widgets:
+                checkbox = widget.layout().itemAt(0).widget()
+                if isinstance(checkbox, QCheckBox):
+                    checkbox.setChecked(False)
         else:
             # Выделяем все
-            for i in range(self.grid_layout.count()):
-                item = self.grid_layout.itemAt(i)
-                if item and item.widget():
-                    checkbox = item.widget().layout().itemAt(0).widget()
-                    if isinstance(checkbox, QCheckBox):
-                        checkbox.setChecked(True)
+            for widget in self.file_widgets:
+                checkbox = widget.layout().itemAt(0).widget()
+                if isinstance(checkbox, QCheckBox):
+                    checkbox.setChecked(True)
 
     @property
     def selected_files(self):
-        return self._selected_files
-
-    @selected_files.setter
-    def selected_files(self, value):
-        self._selected_files = value
+        return list(self._selected_files)
 
 
 class GroupRenameDialog(QDialog):
@@ -288,23 +305,6 @@ class FileManagerApp(QMainWindow):
         self.files_view.selection_changed.connect(self.on_selection_changed)
         main_layout.addWidget(self.files_view)
 
-        # Командная строка
-        command_layout = QHBoxLayout()
-        command_layout.addWidget(QLabel("Команда:"))
-
-        self.command_input = QLineEdit()
-        self.command_input.setFont(QFont("Consolas", 10))
-        self.command_input.returnPressed.connect(self.execute_command)
-
-        self.execute_button = QPushButton("Выполнить")
-        self.execute_button.clicked.connect(self.execute_command)
-        self.execute_button.setFixedWidth(100)
-
-        command_layout.addWidget(self.command_input)
-        command_layout.addWidget(self.execute_button)
-
-        main_layout.addLayout(command_layout)
-
         # Создаем меню
         self.create_menu()
 
@@ -330,6 +330,8 @@ class FileManagerApp(QMainWindow):
         refresh_action.triggered.connect(self.refresh_view)
         file_menu.addAction(refresh_action)
 
+        file_menu.addSeparator()
+
         exit_action = QAction("Выход", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
@@ -337,7 +339,7 @@ class FileManagerApp(QMainWindow):
         # Меню Помощь
         help_menu = menubar.addMenu("Помощь")
 
-        help_action = QAction("Справка по командам", self)
+        help_action = QAction("Справка", self)
         help_action.triggered.connect(self.show_help)
         help_menu.addAction(help_action)
 
@@ -350,6 +352,8 @@ class FileManagerApp(QMainWindow):
         self.path_label.setText(f"Текущий путь: {self.get_relative_path()}")
 
     def on_selection_changed(self, selected_files):
+        # Активируем кнопку, если есть выбранные файлы
+        
         self.group_rename_btn.setEnabled(len(selected_files) > 0)
 
     def group_rename_selected(self):
@@ -414,69 +418,21 @@ class FileManagerApp(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось создать папку: {e}")
 
-    def execute_command(self):
-        command = self.command_input.text().strip()
-        if not command:
-            return
-
-        self.command_input.clear()
-
-        parts = command.split()
-        cmd = parts[0].lower() if parts else ""
-
-        try:
-            if cmd == "выход":
-                self.close()
-
-            elif cmd == "имягр":
-                if len(parts) < 3:
-                    QMessageBox.warning(self, "Ошибка", "Использование: имягр <новое> <имя1> <имя2> <имя3> ...")
-                    return
-
-                new_base_name = parts[1]
-                file_names = parts[2:]
-
-                file_paths = [os.path.join(self.current_path, name) for name in file_names]
-                self.perform_group_rename(file_paths, new_base_name)
-
-            elif cmd == "инфо":
-                self.show_current_info()
-
-            elif cmd == "помощь":
-                self.show_help()
-
-            else:
-                QMessageBox.warning(self, "Ошибка", "Неизвестная команда.")
-                self.show_help()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка выполнения команды: {e}")
-
-    def show_current_info(self):
-        info_text = f"📂 Текущая директория: {self.get_relative_path()}\n\n"
-
-        total_files = 0
-        for root, dirs, files in os.walk(self.current_path):
-            total_files += len(files)
-
-        info_text += f"Всего файлов в директории и поддиректориях: {total_files}\n"
-
-        QMessageBox.information(self, "Информация", info_text)
-
     def show_help(self):
         help_text = """
-📋 Доступные команды:
+💡 Руководство по использованию:
 
-  имягр <новое> <имя1> <имя2> ... - групповое переименование файлов
-  инфо - показать информацию о текущей директории
-  помощь - показать эту справку
-  выход - закрыть программу
+• Двойной клик по имени файла - переименование (как в проводнике Windows)
+• Чекбоксы - для выбора нескольких файлов
+• Кнопка "Выбрать все" - выделяет/снимает выделение со всех файлов
+• Кнопка "Переименовать группу" - групповое переименование выбранных файлов
+• Кнопка "Обновить" - обновляет список файлов
 
-💡 Советы:
-- Двойной клик по имени файла для переименования (как в проводнике Windows)
-- Используйте чекбоксы для выбора нескольких файлов
-- Кнопка "Выбрать все" выделяет/снимает выделение со всех файлов
-- Для группового переименования выберите файлы и нажмите соответствующую кнопку
+📝 Групповое переименование:
+1. Выберите файлы с помощью чекбоксов
+2. Нажмите "Переименовать группу"
+3. Введите базовое имя
+4. Файлы будут переименованы в формате: базовое_имя_1.расширение, базовое_имя_2.расширение и т.д.
 """
         QMessageBox.information(self, "Справка", help_text)
 
