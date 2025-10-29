@@ -320,18 +320,6 @@ class FileManagerApp(QMainWindow):
 
         file_menu.addSeparator()
 
-        group_rename_action = QAction("Групповое переименование", self)
-        group_rename_action.triggered.connect(self.group_rename_selected)
-        file_menu.addAction(group_rename_action)
-
-        file_menu.addSeparator()
-
-        refresh_action = QAction("Обновить", self)
-        refresh_action.triggered.connect(self.refresh_view)
-        file_menu.addAction(refresh_action)
-
-        file_menu.addSeparator()
-
         exit_action = QAction("Выход", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
@@ -367,7 +355,7 @@ class FileManagerApp(QMainWindow):
         selected_files = sorted(selected_files)
 
         dialog = GroupRenameDialog(len(selected_files), self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.Accepted:
             new_base_name = dialog.get_new_name()
             if not new_base_name:
                 QMessageBox.warning(self, "Ошибка", "Введите базовое имя.")
