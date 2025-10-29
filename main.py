@@ -197,7 +197,7 @@ class FilesView(QWidget):
         self.refresh_files()
 
     def on_file_selected(self, file_path, state, checkbox):
-        if state == Qt.Checked:
+        if checkbox.checkState() == Qt.Checked:
             self._selected_files.add(file_path)
         else:
             self._selected_files.discard(file_path)
@@ -353,7 +353,6 @@ class FileManagerApp(QMainWindow):
 
     def on_selection_changed(self, selected_files):
         # Активируем кнопку, если есть выбранные файлы
-        
         self.group_rename_btn.setEnabled(len(selected_files) > 0)
 
     def group_rename_selected(self):
