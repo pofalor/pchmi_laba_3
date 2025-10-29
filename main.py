@@ -51,28 +51,45 @@ class FileCard(QFrame):
         date_label.setStyleSheet("QLabel { color: gray; font-size: 10px; }")
         layout.addWidget(date_label)
 
-        # Теги (папки) - используем Flow Layout
+        # Теги (папки) - используем Flow Layout с ограничением 3 тега в строке
         tags_label = QLabel("Теги:")
         tags_label.setStyleSheet("QLabel { font-weight: bold; font-size: 10px; }")
         layout.addWidget(tags_label)
 
-        self.tags_widget = QWidget()
-        self.tags_layout = QHBoxLayout(self.tags_widget)
-        self.tags_layout.setContentsMargins(0, 0, 0, 0)
-        self.tags_layout.setSpacing(3)
-
         # Получаем теги из пути относительно root_path
         rel_path = os.path.relpath(os.path.dirname(self.file_path), self.root_path)
-        if rel_path != '.':
-            folders = rel_path.split(os.sep)
-            for folder in folders:
+        folders = rel_path.split(os.sep) if rel_path != '.' else []
+
+        # Создаем контейнер для тегов с вертикальным layout
+        self.tags_container = QWidget()
+        tags_container_layout = QVBoxLayout(self.tags_container)
+        tags_container_layout.setContentsMargins(0, 0, 0, 0)
+        tags_container_layout.setSpacing(3)
+
+        # Разбиваем теги на строки по 3 тега в каждой
+        max_tags_per_line = 3
+        for i in range(0, len(folders), max_tags_per_line):
+            line_tags = folders[i:i + max_tags_per_line]
+
+            # Создаем горизонтальный контейнер для одной строки тегов
+            line_widget = QWidget()
+            line_layout = QHBoxLayout(line_widget)
+            line_layout.setContentsMargins(0, 0, 0, 0)
+            line_layout.setSpacing(3)
+
+            # Добавляем теги в текущую строку
+            for folder in line_tags:
                 tag_label = QLabel(f"📁 {folder}")
                 tag_label.setStyleSheet(
                     "QLabel { background: #e0e0e0; padding: 2px 4px; border-radius: 3px; font-size: 9px; }")
                 tag_label.setWordWrap(True)
-                self.tags_layout.addWidget(tag_label)
+                line_layout.addWidget(tag_label)
 
-        layout.addWidget(self.tags_widget)
+            # Добавляем растягивающий элемент в конец строки
+            line_layout.addStretch()
+            tags_container_layout.addWidget(line_widget)
+
+        layout.addWidget(self.tags_container)
         layout.addStretch()
 
         # Обновляем высоту карточки в зависимости от количества тегов
@@ -81,8 +98,12 @@ class FileCard(QFrame):
     def update_card_height(self):
         # Базовая высота + дополнительная высота за теги
         base_height = 120
-        tag_count = self.tags_layout.count()
-        additional_height = (tag_count // 2) * 20  # +20px за каждые 2 тега
+        rel_path = os.path.relpath(os.path.dirname(self.file_path), self.root_path)
+        tag_count = len(rel_path.split(os.sep)) if rel_path != '.' else 0
+
+        # Вычисляем количество строк тегов (по 3 тега в строке)
+        lines_count = (tag_count + 2) // 3  # Округление вверх
+        additional_height = lines_count * 25  # +25px за каждую строку тегов
         self.setMinimumHeight(base_height + additional_height)
 
     def start_rename(self, event):
